@@ -3,6 +3,7 @@ from sklearn.cluster import DBSCAN
 from sklearn.metrics.pairwise import cosine_similarity
 from transformers import CLIPProcessor, CLIPModel
 import torch
+from torch.nn import TransformerEncoder, TransformerEncoderLayer
 import cv2
 import os
 import matplotlib.pyplot as plt
@@ -23,7 +24,7 @@ def get_clip_embedding(text):
     return embeddings.squeeze().cpu().numpy()  # shape: (512,)
 
 
-def cluster_by_clip_and_dbscan(filtered_objects, depth_weight=3.5, eps=2.0, min_samples=1):
+def cluster_by_clip_and_dbscan(filtered_objects, depth_weight=5.0, clip_weight=0.1, eps=1.5, min_samples=1):
     """
     CLIP + DBSCAN 기반 의미-거리 그룹화
     - filtered_objects: 필터링된 객체 리스트
@@ -35,35 +36,35 @@ def cluster_by_clip_and_dbscan(filtered_objects, depth_weight=3.5, eps=2.0, min_
     for obj in filtered_objects:
         obj["clip_embed"] = get_clip_embedding(obj["class_name"])
 
-    clip_matrix = np.array([obj["clip_embed"] for obj in filtered_objects])  # (N, 512)
+    clip_matrix = np.array([obj["clip_embed"] for obj in filtered_objects]) * clip_weight  # (N, 512)
     
     if clip_matrix.ndim == 1: # class가 하나일 경우 error 방지
         clip_matrix = clip_matrix.reshape(-1, 1)
 
     semantic_sim = cosine_similarity(clip_matrix)
-    semantic_dist = 1 - semantic_sim
-    semantic_dist = np.clip(semantic_dist, 0, 2) # 의미적 거리
+    semantic_dist = np.clip(1 - semantic_sim, 0, 2) # 의미적 거리
 
     xys = np.array([obj["center"] for obj in filtered_objects]) # x, y 정규화
     xys = (xys - xys.mean(axis=0)) / (xys.std(axis=0) + 1e-8)
 
-    # depth 가중치 적용
-    depths = np.array([[obj["depth"] * depth_weight] for obj in filtered_objects])
+    depths = np.array([[obj["depth"] * depth_weight] for obj in filtered_objects]) # depth 가중치 적용
     coords = np.concatenate([xys, depths], axis=1)
     spatial_dist = cdist(coords, coords) # 위치적 거리
 
-    '''
-    # 2. 벡터 구성: (center_x, center_y, depth, clip_embed)
-    vectors = []
-    for obj, coord in zip(filtered_objects, coords):
-        vec = np.concatenate([coord, obj["clip_embed"]])
-        vectors.append(vec)
+    # transformer 사용을 위한 feature
+    features = [np.concatenate([obj["clip_embed"], obj["center"], [obj["depth"]]]) for obj in filtered_objects]
+    features = torch.tensor(features).unsqueeze(1).float()  # (N, 1, D)
 
-    vectors = np.array(vectors)
-    '''
+    D = features.shape[-1]
 
-    alpha, beta = 0.7, 0.3
-    hybrid_dist = alpha * spatial_dist + beta * semantic_dist # 의미적 거리 + 위치적 거리
+    encoder_layer = TransformerEncoderLayer(d_model=D, nhead=5)
+    transformer = TransformerEncoder(encoder_layer, num_layers=2)
+    out = transformer(features)  # (N, 1, D)
+
+    attention_dist = cosine_similarity(out.squeeze(1).detach().numpy()) # attention을 적용한 의미적 거리
+
+    alpha, beta, gamma = 0.7, 0.3, 0.15
+    hybrid_dist = alpha * spatial_dist + beta * semantic_dist + gamma * attention_dist # 의미적 거리 + 위치적 거리
     hybrid_dist = np.clip(hybrid_dist, 0, None)
 
     # 3. DBSCAN clustering

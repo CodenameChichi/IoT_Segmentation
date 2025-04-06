@@ -9,7 +9,7 @@ def load_yolo(model_path='object/yolov8s.pt'):
 
 def detect_objects(model, image_bgr):
     image_rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
-    results = model(image_rgb)
+    results = model(image_rgb, iou=0.5)
     return results
 
 def visualize_detections(image, results, depth_map, class_names, save_path="output/result.jpg"):
@@ -35,7 +35,13 @@ def visualize_detections(image, results, depth_map, class_names, save_path="outp
     cv2.imwrite(save_path, image_with_boxes)
     print(f"Result image saved: {save_path}")
 
-def filter_detections(results, depth_map, conf_thresh=0.5, depth_thresh=8.0, area_thresh=500, class_names=None):
+def filter_detections(results, depth_map, conf_thresh=0.5, depth_thresh=15.0, area_thresh=250, class_names=None):
+    class_ids = [int(box.cls[0]) for box in results[0].boxes]
+    unique_classes = set(class_ids)
+
+    if len(unique_classes) <= 5:
+        conf_thresh = 0.25
+
     filtered = []
     for box in results[0].boxes:
         x1, y1, x2, y2 = map(int, box.xyxy[0])
@@ -44,7 +50,7 @@ def filter_detections(results, depth_map, conf_thresh=0.5, depth_thresh=8.0, are
         conf = float(box.conf[0])
         area = (x2 - x1) * (y2 - y1)
 
-        # depth calculation (median depth value in the bbox) -> 얘가 나을듯?
+        # depth calculation (median depth value in the bbox)
         # depth_map[cy, cx] -> center depth
         bbox_depth = depth_map[y1:y2, x1:x2]
         depth_val = np.median(bbox_depth)  

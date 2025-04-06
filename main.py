@@ -5,6 +5,7 @@ if __name__ == "__main__":
     # 1. Depth Estimation + Object Detection + Filtering
     analyze = SceneAnalyze(r'C:\Users\user\Desktop\segmentation_iot\dataset\val2017 (1)\val2017\000000415194.jpg')
     # analyze = SceneAnalyze(r'C:\Users\user\Desktop\segmentation_iot\dataset\val2017 (1)\val2017\000000013659.jpg') 
+    # analyze = SceneAnalyze(r'C:\Users\user\Desktop\segmentation_iot\dataset\val2017 (1)\val2017\000000007281.jpg')
     analyze.run()
 
     print("[DEBUG] 필터링된 객체 수:", len(analyze.filtered_objects))
