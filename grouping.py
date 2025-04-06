@@ -7,6 +7,7 @@ import cv2
 import os
 import matplotlib.pyplot as plt
 import random
+from scipy.spatial.distance import cdist
 
 # CLIP model initialization
 clip_model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32")
@@ -22,7 +23,7 @@ def get_clip_embedding(text):
     return embeddings.squeeze().cpu().numpy()  # shape: (512,)
 
 
-def cluster_by_clip_and_dbscan(filtered_objects, depth_weight=1.0, eps=1.2, min_samples=2):
+def cluster_by_clip_and_dbscan(filtered_objects, depth_weight=3.5, eps=2.0, min_samples=1):
     """
     CLIP + DBSCAN 기반 의미-거리 그룹화
     - filtered_objects: 필터링된 객체 리스트
@@ -34,20 +35,40 @@ def cluster_by_clip_and_dbscan(filtered_objects, depth_weight=1.0, eps=1.2, min_
     for obj in filtered_objects:
         obj["clip_embed"] = get_clip_embedding(obj["class_name"])
 
+    clip_matrix = np.array([obj["clip_embed"] for obj in filtered_objects])  # (N, 512)
+    
+    if clip_matrix.ndim == 1: # class가 하나일 경우 error 방지
+        clip_matrix = clip_matrix.reshape(-1, 1)
+
+    semantic_sim = cosine_similarity(clip_matrix)
+    semantic_dist = 1 - semantic_sim
+    semantic_dist = np.clip(semantic_dist, 0, 2) # 의미적 거리
+
+    xys = np.array([obj["center"] for obj in filtered_objects]) # x, y 정규화
+    xys = (xys - xys.mean(axis=0)) / (xys.std(axis=0) + 1e-8)
+
+    # depth 가중치 적용
+    depths = np.array([[obj["depth"] * depth_weight] for obj in filtered_objects])
+    coords = np.concatenate([xys, depths], axis=1)
+    spatial_dist = cdist(coords, coords) # 위치적 거리
+
+    '''
     # 2. 벡터 구성: (center_x, center_y, depth, clip_embed)
     vectors = []
-    for obj in filtered_objects:
-        x, y = obj["center"]
-        d = obj["depth"] * depth_weight
-        clip_vec = obj["clip_embed"]
-        vec = np.concatenate([[x, y, d], clip_vec])
+    for obj, coord in zip(filtered_objects, coords):
+        vec = np.concatenate([coord, obj["clip_embed"]])
         vectors.append(vec)
 
-    vectors = np.array(vectors)  # shape: (N, 3+512)
+    vectors = np.array(vectors)
+    '''
+
+    alpha, beta = 0.7, 0.3
+    hybrid_dist = alpha * spatial_dist + beta * semantic_dist # 의미적 거리 + 위치적 거리
+    hybrid_dist = np.clip(hybrid_dist, 0, None)
 
     # 3. DBSCAN clustering
-    clustering = DBSCAN(eps=eps, min_samples=min_samples).fit(vectors)
-    labels = clustering.labels_
+    clustering = DBSCAN(eps=eps, min_samples=min_samples, metric='precomputed').fit(hybrid_dist)
+    labels = clustering.fit_predict(hybrid_dist)
 
     for i, obj in enumerate(filtered_objects):
         obj["cluster_id"] = labels[i]
